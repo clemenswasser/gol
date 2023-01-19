@@ -1,4 +1,7 @@
-use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::{
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    vec,
+};
 
 use wgpu::util::DeviceExt;
 
@@ -64,7 +67,9 @@ impl GOL {
                 height: window_size.height,
                 depth_or_array_layers: 1,
             },
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
         });
 
         let mut data = vec![0; (window_size.width * window_size.height * 4) as usize];
@@ -143,21 +148,7 @@ impl GOL {
         }
     }
 
-    fn resize(&mut self, physical_size: &winit::dpi::PhysicalSize<u32>) {
-        self.surface_config.width = physical_size.width;
-        self.surface_config.height = physical_size.height;
-        self.surface.configure(&self.device, &self.surface_config);
-    }
-
-    fn render(&mut self) {
-        let surface_texture = match self.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(_) => return,
-        };
-        let surface_texture_view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
+    fn step_simulation(&mut self) -> wgpu::CommandEncoder {
         let mut command_encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -188,16 +179,17 @@ impl GOL {
                         },
                     ],
                 });
-        let front_texture_view = self
-            .front_texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&front_texture_view),
+                    resource: wgpu::BindingResource::TextureView(
+                        &self
+                            .front_texture
+                            .create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -235,6 +227,31 @@ impl GOL {
                 1,
             );
         }
+
+        command_encoder
+    }
+
+    fn resize(&mut self, physical_size: &winit::dpi::PhysicalSize<u32>) {
+        self.surface_config.width = physical_size.width;
+        self.surface_config.height = physical_size.height;
+        self.surface.configure(&self.device, &self.surface_config);
+    }
+
+    fn render(&mut self) {
+        let command_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        self.render_with_command_encoder(command_encoder)
+    }
+
+    fn render_with_command_encoder(&mut self, mut command_encoder: wgpu::CommandEncoder) {
+        let surface_texture = match self.surface.get_current_texture() {
+            Ok(output) => output,
+            Err(_) => return,
+        };
+        let surface_texture_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         let blit_bind_layout =
             self.device
@@ -300,7 +317,11 @@ impl GOL {
             layout: &blit_bind_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&front_texture_view),
+                resource: wgpu::BindingResource::TextureView(
+                    &self
+                        .back_texture
+                        .create_view(&wgpu::TextureViewDescriptor::default()),
+                ),
             }],
         });
 
@@ -324,8 +345,6 @@ impl GOL {
 
         self.queue.submit(std::iter::once(command_encoder.finish()));
         surface_texture.present();
-
-        std::mem::swap(&mut self.front_texture, &mut self.back_texture);
     }
 }
 
@@ -334,6 +353,8 @@ fn main() {
     let window = winit::window::Window::new(&event_loop).unwrap();
     let mut gol = GOL::new(&window);
     let mut paused = true;
+    let mut last_position = winit::dpi::PhysicalPosition::<f64>::default();
+    let mut last_left_button_state = winit::event::ElementState::Released;
 
     event_loop.run(
         move |event, _event_loop_window_target, control_flow| match event {
@@ -346,12 +367,50 @@ fn main() {
                     winit::event::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                         gol.resize(new_inner_size)
                     }
+                    winit::event::WindowEvent::MouseInput {
+                        device_id,
+                        state,
+                        button,
+                        modifiers,
+                    } => {
+                        if button == winit::event::MouseButton::Left {
+                            last_left_button_state = state;
+                        }
+                    }
+                    winit::event::WindowEvent::CursorMoved {
+                        device_id,
+                        position,
+                        modifiers: _,
+                    } => {
+                        if last_left_button_state == winit::event::ElementState::Pressed {
+                            gol.queue.write_texture(
+                                wgpu::ImageCopyTextureBase {
+                                    texture: &gol.back_texture,
+                                    aspect: wgpu::TextureAspect::All,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d {
+                                        x: last_position.x.min(position.x) as u32,
+                                        y: last_position.y.min(position.y) as u32,
+                                        z: 0,
+                                    },
+                                },
+                                &[u8::MAX, u8::MAX, u8::MAX, u8::MAX],
+                                wgpu::ImageDataLayout {
+                                    bytes_per_row: NonZeroU32::new(4),
+                                    ..Default::default()
+                                },
+                                wgpu::Extent3d {
+                                    width: 1,
+                                    height: 1,
+                                    depth_or_array_layers: 1,
+                                },
+                            )
+                        }
+                        last_position = position;
+                    }
                     winit::event::WindowEvent::ReceivedCharacter(c) => {
                         if c == ' ' {
                             paused = !paused;
-                            if !paused {
-                                window.request_redraw()
-                            }
                         }
                     }
                     _ => {}
@@ -359,14 +418,14 @@ fn main() {
             }
             winit::event::Event::RedrawRequested(window_id) if window_id == window.id() => {
                 if !paused {
+                    let command_encoder = gol.step_simulation();
+                    gol.render_with_command_encoder(command_encoder);
+                    std::mem::swap(&mut gol.front_texture, &mut gol.back_texture);
+                } else {
                     gol.render()
                 }
             }
-            winit::event::Event::MainEventsCleared => {
-                if !paused {
-                    window.request_redraw()
-                }
-            }
+            winit::event::Event::MainEventsCleared => window.request_redraw(),
             _ => {}
         },
     )
