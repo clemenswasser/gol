@@ -13,7 +13,7 @@ struct VertexOutput {
 }
 
 fn apply_perspective(pos: vec2<f32>) -> vec4<f32> {
-    return vec4(pos * camera.zoom_level + vec2(-camera.offset_x, camera.offset_y), 0.0, 1.0);;
+    return vec4((pos + vec2(-camera.offset_x, camera.offset_y)) * camera.zoom_level, 0.0, 1.0);
 }
 
 @vertex

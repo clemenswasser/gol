@@ -497,9 +497,13 @@ fn main() {
 
                         if right_button_state == winit::event::ElementState::Pressed {
                             gol.camera.offset_x += (last_position.x - position.x) as f32
-                                / gol.surface_config.width as f32 * 2.0;
+                                / gol.surface_config.width as f32
+                                / gol.camera.zoom_level
+                                * 2.0;
                             gol.camera.offset_y += (last_position.y - position.y) as f32
-                                / gol.surface_config.height as f32 * 2.0;
+                                / gol.surface_config.height as f32
+                                / gol.camera.zoom_level
+                                * 2.0;
                             gol.queue.write_buffer(
                                 &gol.camera_buffer,
                                 0,
