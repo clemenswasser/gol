@@ -3,9 +3,11 @@ use std::{num::NonZeroU32, vec};
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy, Debug)]
 struct Camera {
     zoom_level: f32,
+    offset_x: f32,
+    offset_y: f32,
 }
 
 struct GOL {
@@ -147,13 +149,17 @@ impl GOL {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
-        let camera = Camera { zoom_level: 1.0 };
+        let camera = Camera {
+            zoom_level: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        };
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             contents: bytemuck::bytes_of(&camera),
@@ -412,7 +418,8 @@ fn main() {
     let mut gol = GOL::new(&window);
     let mut paused = true;
     let mut last_position = winit::dpi::PhysicalPosition::<f64>::default();
-    let mut last_left_button_state = winit::event::ElementState::Released;
+    let mut left_button_state = winit::event::ElementState::Released;
+    let mut right_button_state = winit::event::ElementState::Released;
 
     event_loop.run(
         move |event, _event_loop_window_target, control_flow| match event {
@@ -432,7 +439,9 @@ fn main() {
                         modifiers,
                     } => {
                         if button == winit::event::MouseButton::Left {
-                            last_left_button_state = state;
+                            left_button_state = state;
+                        } else if button == winit::event::MouseButton::Right {
+                            right_button_state = state;
                         }
                     }
                     winit::event::WindowEvent::MouseWheel {
@@ -455,7 +464,7 @@ fn main() {
                         position,
                         modifiers: _,
                     } => {
-                        if last_left_button_state == winit::event::ElementState::Pressed {
+                        if left_button_state == winit::event::ElementState::Pressed {
                             gol.queue.write_texture(
                                 wgpu::ImageCopyTextureBase {
                                     texture: &gol.back_texture,
@@ -485,6 +494,19 @@ fn main() {
                                 },
                             )
                         }
+
+                        if right_button_state == winit::event::ElementState::Pressed {
+                            gol.camera.offset_x += (last_position.x - position.x) as f32
+                                / gol.surface_config.width as f32 * 2.0;
+                            gol.camera.offset_y += (last_position.y - position.y) as f32
+                                / gol.surface_config.height as f32 * 2.0;
+                            gol.queue.write_buffer(
+                                &gol.camera_buffer,
+                                0,
+                                bytemuck::bytes_of(&gol.camera),
+                            );
+                        }
+
                         last_position = position;
                     }
                     winit::event::WindowEvent::ReceivedCharacter(c) => {
