@@ -1,9 +1,12 @@
-use std::{
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    vec,
-};
+use std::{num::NonZeroU32, vec};
 
 use wgpu::util::DeviceExt;
+
+#[repr(C)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+struct Camera {
+    zoom_level: f32,
+}
 
 struct GOL {
     surface: wgpu::Surface,
@@ -14,6 +17,9 @@ struct GOL {
     back_texture: wgpu::Texture,
     gol_shader_module: wgpu::ShaderModule,
     blit_shader_module: wgpu::ShaderModule,
+    blit_sampler: wgpu::Sampler,
+    camera: Camera,
+    camera_buffer: wgpu::Buffer,
 }
 
 impl GOL {
@@ -24,6 +30,7 @@ impl GOL {
             instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     compatible_surface: Some(&surface),
+                    power_preference: wgpu::PowerPreference::HighPerformance,
                     ..Default::default()
                 })
                 .await
@@ -50,7 +57,7 @@ impl GOL {
             format: surface.get_supported_formats(&adapter)[0],
             width: window_size.width,
             height: window_size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
         };
 
@@ -136,6 +143,24 @@ impl GOL {
         let blit_shader_module =
             device.create_shader_module(wgpu::include_wgsl!("blit_shader.wgsl"));
 
+        let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let camera = Camera { zoom_level: 1.0 };
+
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            contents: bytemuck::bytes_of(&camera),
+            label: None,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
         Self {
             surface,
             surface_config,
@@ -145,6 +170,9 @@ impl GOL {
             back_texture,
             gol_shader_module,
             blit_shader_module,
+            blit_sampler,
+            camera,
+            camera_buffer,
         }
     }
 
@@ -257,16 +285,34 @@ impl GOL {
             self.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: None,
-                    entries: &[wgpu::BindGroupLayoutEntry {
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        binding: 0,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            visibility: wgpu::ShaderStages::VERTEX,
+                            binding: 0,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
                         },
-                        count: None,
-                    }],
+                        wgpu::BindGroupLayoutEntry {
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            binding: 1,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            binding: 2,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                    ],
                 });
         let blit_pipeline_layout =
             self.device
@@ -315,14 +361,26 @@ impl GOL {
         let blit_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &blit_bind_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(
-                    &self
-                        .back_texture
-                        .create_view(&wgpu::TextureViewDescriptor::default()),
-                ),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(
+                        self.camera_buffer.as_entire_buffer_binding(),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &self
+                            .back_texture
+                            .create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.blit_sampler),
+                },
+            ],
         });
 
         {
@@ -377,6 +435,21 @@ fn main() {
                             last_left_button_state = state;
                         }
                     }
+                    winit::event::WindowEvent::MouseWheel {
+                        device_id,
+                        delta,
+                        phase,
+                        modifiers,
+                    } => {
+                        if let winit::event::MouseScrollDelta::LineDelta(delta_x, delta_y) = delta {
+                            gol.camera.zoom_level *= if delta_y < 0.0 { 0.9 } else { 1.1 };
+                            gol.queue.write_buffer(
+                                &gol.camera_buffer,
+                                0,
+                                bytemuck::bytes_of(&gol.camera),
+                            );
+                        }
+                    }
                     winit::event::WindowEvent::CursorMoved {
                         device_id,
                         position,
@@ -389,8 +462,14 @@ fn main() {
                                     aspect: wgpu::TextureAspect::All,
                                     mip_level: 0,
                                     origin: wgpu::Origin3d {
-                                        x: last_position.x.min(position.x) as u32,
-                                        y: last_position.y.min(position.y) as u32,
+                                        x: u32::min(
+                                            position.x as u32,
+                                            gol.surface_config.width - 1,
+                                        ),
+                                        y: u32::min(
+                                            position.y as u32,
+                                            gol.surface_config.height - 1,
+                                        ),
                                         z: 0,
                                     },
                                 },
