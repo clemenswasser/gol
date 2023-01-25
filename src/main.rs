@@ -22,6 +22,10 @@ struct GOL {
     blit_sampler: wgpu::Sampler,
     camera: Camera,
     camera_buffer: wgpu::Buffer,
+    compute_pipeline: wgpu::ComputePipeline,
+    compute_bind_layout: wgpu::BindGroupLayout,
+    blit_pipeline: wgpu::RenderPipeline,
+    blit_bind_layout: wgpu::BindGroupLayout,
 }
 
 impl GOL {
@@ -167,6 +171,115 @@ impl GOL {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::ReadOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: Some(&compute_pipeline_layout),
+            module: &gol_shader_module,
+            entry_point: "main",
+        });
+
+        let blit_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    binding: 0,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    binding: 1,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    binding: 2,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&blit_bind_layout],
+            push_constant_ranges: &[],
+        });
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&blit_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader_module,
+                entry_point: "vs_main",
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader_module,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_config.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
         Self {
             surface,
             surface_config,
@@ -179,43 +292,17 @@ impl GOL {
             blit_sampler,
             camera,
             camera_buffer,
+            compute_pipeline,
+            compute_bind_layout: bind_group_layout,
+            blit_pipeline,
+            blit_bind_layout,
         }
     }
 
     fn step_simulation(&mut self) -> wgpu::CommandEncoder {
-        let mut command_encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let bind_group_layout =
-            self.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: None,
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::StorageTexture {
-                                access: wgpu::StorageTextureAccess::WriteOnly,
-                                format: wgpu::TextureFormat::Rgba8Unorm,
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::StorageTexture {
-                                access: wgpu::StorageTextureAccess::ReadOnly,
-                                format: wgpu::TextureFormat::Rgba8Unorm,
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: &bind_group_layout,
+            layout: &self.compute_bind_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -235,25 +322,15 @@ impl GOL {
                 },
             ],
         });
-        let compute_pipeline_layout =
-            self.device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: None,
-                    bind_group_layouts: &[&bind_group_layout],
-                    push_constant_ranges: &[],
-                });
-        let compute_pipeline =
-            self.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: None,
-                    layout: Some(&compute_pipeline_layout),
-                    module: &self.gol_shader_module,
-                    entry_point: "main",
-                });
+
+        let mut command_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
         {
             let mut compute_pass =
                 command_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            compute_pass.set_pipeline(&compute_pipeline);
+            compute_pass.set_pipeline(&self.compute_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(
                 (self.surface_config.width + 7) / 8,
@@ -287,86 +364,9 @@ impl GOL {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let blit_bind_layout =
-            self.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: None,
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            visibility: wgpu::ShaderStages::VERTEX,
-                            binding: 0,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            binding: 1,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            binding: 2,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                    ],
-                });
-        let blit_pipeline_layout =
-            self.device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: None,
-                    bind_group_layouts: &[&blit_bind_layout],
-                    push_constant_ranges: &[],
-                });
-        let blit_pipeline = self
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
-                layout: Some(&blit_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &self.blit_shader_module,
-                    entry_point: "vs_main",
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &self.blit_shader_module,
-                    entry_point: "fs_main",
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: self.surface_config.format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Back),
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview: None,
-            });
-
         let blit_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: &blit_bind_layout,
+            layout: &self.blit_bind_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -402,7 +402,7 @@ impl GOL {
                 })],
                 depth_stencil_attachment: None,
             });
-            render_pass.set_pipeline(&blit_pipeline);
+            render_pass.set_pipeline(&self.blit_pipeline);
             render_pass.set_bind_group(0, &blit_bind_group, &[]);
             render_pass.draw(0..6, 0..1);
         }
@@ -472,11 +472,17 @@ fn main() {
                                     mip_level: 0,
                                     origin: wgpu::Origin3d {
                                         x: u32::min(
-                                            position.x as u32,
+                                            (position.x as f32
+                                                + gol.camera.offset_x
+                                                    * gol.surface_config.width as f32)
+                                                as u32,
                                             gol.surface_config.width - 1,
                                         ),
                                         y: u32::min(
-                                            position.y as u32,
+                                            (position.y as f32
+                                                + gol.camera.offset_y
+                                                    * gol.surface_config.height as f32)
+                                                as u32,
                                             gol.surface_config.height - 1,
                                         ),
                                         z: 0,
