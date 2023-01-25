@@ -256,8 +256,8 @@ impl GOL {
             compute_pass.set_pipeline(&compute_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(
-                self.surface_config.width,
-                self.surface_config.height,
+                (self.surface_config.width + 7) / 8,
+                (self.surface_config.height + 7) / 8,
                 1,
             );
         }
