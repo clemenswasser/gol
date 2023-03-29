@@ -90,40 +90,39 @@ impl GOL {
         let off_x = 400;
         let off_y = 300;
 
-        data[4 * (width * (off_y + 0) + (off_x + 1)) + 0] = u8::MAX;
-        data[4 * (width * (off_y + 0) + (off_x + 1)) + 1] = u8::MAX;
-        data[4 * (width * (off_y + 0) + (off_x + 1)) + 2] = u8::MAX;
-        data[4 * (width * (off_y + 0) + (off_x + 1)) + 3] = u8::MAX;
+        let mut pattern = "20b3o3b3o$19bo2bo3bo2bo$4o18bo3bo18b4o$o3bo17bo3bo17bo3bo$o8bo12bo3bo12bo8bo$bo2bo2b2o2bo25bo2b2o2bo2bo$6bo5bo7b3o3b3o7bo5bo$6bo5bo8bo5bo8bo5bo$6bo5bo8b7o8bo5bo$bo2bo2b2o2bo2b2o4bo7bo4b2o2bo2b2o2bo2bo$o8bo3b2o4b11o4b2o3bo8bo$o3bo9b2o17b2o9bo3bo$4o11b19o11b4o$16bobo11bobo$19b11o$19bo9bo$20b9o$24bo$20b3o3b3o$22bo3bo2$21b3ob3o$21b3ob3o$20bob2ob2obo$20b3o3b3o$21bo5bo!";
+        let mut x = 0;
+        let mut y = 0;
+        loop {
+            let blank_pos = pattern.find('b').unwrap_or(usize::MAX);
+            let active_pos = pattern.find('o').unwrap_or(usize::MAX);
+            let line_pos = pattern.find('$').unwrap_or(usize::MAX);
+            let end_pos = pattern.find('!').unwrap_or(usize::MAX);
+            let pos = blank_pos.min(active_pos).min(line_pos).min(end_pos);
 
-        data[4 * (width * (off_y + 1) + (off_x + 3)) + 0] = u8::MAX;
-        data[4 * (width * (off_y + 1) + (off_x + 3)) + 1] = u8::MAX;
-        data[4 * (width * (off_y + 1) + (off_x + 3)) + 2] = u8::MAX;
-        data[4 * (width * (off_y + 1) + (off_x + 3)) + 3] = u8::MAX;
+            if pos == end_pos {
+                break;
+            }
 
-        data[4 * (width * (off_y + 2) + (off_x + 0)) + 0] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 0)) + 1] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 0)) + 2] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 0)) + 3] = u8::MAX;
+            let count = pattern[..pos].parse::<usize>().unwrap_or(1);
+            if pos == blank_pos || pos == active_pos {
+                let value = if pos == blank_pos { 0 } else { u8::MAX };
+                for x in x..x + count {
+                    data[4 * (width * (off_y + y) + (off_x + x))] = value;
+                    data[4 * (width * (off_y + y) + (off_x + x)) + 1] = value;
+                    data[4 * (width * (off_y + y) + (off_x + x)) + 2] = value;
+                    data[4 * (width * (off_y + y) + (off_x + x)) + 3] = value;
+                }
+                x += count;
+            } else if pos == line_pos {
+                y += count;
+                x = 0;
+            } else {
+                break;
+            }
 
-        data[4 * (width * (off_y + 2) + (off_x + 1)) + 0] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 1)) + 1] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 1)) + 2] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 1)) + 3] = u8::MAX;
-
-        data[4 * (width * (off_y + 2) + (off_x + 4)) + 0] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 4)) + 1] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 4)) + 2] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 4)) + 3] = u8::MAX;
-
-        data[4 * (width * (off_y + 2) + (off_x + 5)) + 0] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 5)) + 1] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 5)) + 2] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 5)) + 3] = u8::MAX;
-
-        data[4 * (width * (off_y + 2) + (off_x + 6)) + 0] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 6)) + 1] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 6)) + 2] = u8::MAX;
-        data[4 * (width * (off_y + 2) + (off_x + 6)) + 3] = u8::MAX;
+            pattern = &pattern[pos + 1..];
+        }
 
         let back_texture = device.create_texture_with_data(
             &queue,
